@@ -92,11 +92,16 @@ func main() {
 
 	alreadyMapped := getAlreadyMappedIssueIDs(ctx, coll)
 	newMappingsByIssueID := make(map[int]*[]JiraPR)
-	for _, b := range bugs.Issues {
+	for _, b := range *bugs {
 		if _, ok := alreadyMapped[b.ID]; !ok {
 			ds := findDevStatus(b, auth)
 			newMappingsByIssueID[b.ID] = ds
 		}
+	}
+
+	if len(newMappingsByIssueID) == 0 {
+		fmt.Println("No new mappings found")
+		return
 	}
 
 	newMappings := convertJiraMappingsToMongoMappings(newMappingsByIssueID)
@@ -147,10 +152,11 @@ func getAlreadyMappedIssueIDs(ctx context.Context, collection *mongo.Collection)
 	return mappings
 }
 
-func collectBugs(auth string) *IssuesResponse {
+func collectBugs(auth string) *[]Bug {
 	queryParams := url.Values{}
 	queryParams.Add("jql", fmt.Sprintf("project = %s and type = Bug", jiraProject))
 	queryParams.Add("fields", "id,key")
+	queryParams.Add("maxResults", "150")
 
 	req, err := http.NewRequest("GET", fmt.Sprintf("%s/rest/api/latest/search?%s", jiraHost, queryParams.Encode()), nil)
 	if err != nil {
@@ -174,7 +180,7 @@ func collectBugs(auth string) *IssuesResponse {
 
 	fmt.Printf("%+v\n", bugs)
 
-	return bugs
+	return &bugs.Issues
 }
 
 func findDevStatus(b Bug, auth string) *[]JiraPR {
@@ -215,10 +221,13 @@ func convertJiraMappingsToMongoMappings(jiraMappings map[int]*[]JiraPR) *[]Mongo
 				continue
 			}
 
+			repoURL := strings.Split(pr.URL, "/pull")[0]
+			repo := strings.Split(repoURL, "github.com/")[1]
+
 			var m MongoMapping
 			m.Project = jiraProject
 			m.IssueID = k
-			m.Repo = strings.Split(pr.URL, "/pull")[0]
+			m.Repo = repo
 			m.PRID, _ = strconv.Atoi(pr.ID[1:])
 			m.Visited = false
 
