@@ -128,7 +128,9 @@ func connectToMongo() (context.Context, context.CancelFunc, *mongo.Client, *mong
 }
 
 func getAlreadyMappedIssueIDs(ctx context.Context, collection *mongo.Collection) map[int]bool {
-	cur, err := collection.Find(ctx, bson.D{})
+	projection := options.Find().SetProjection(bson.M{"_id": 0, "issue_id": 1})
+
+	cur, err := collection.Find(ctx, bson.D{}, projection)
 	if err != nil {
 		log.Fatal(err)
 	}
