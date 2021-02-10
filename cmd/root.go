@@ -52,6 +52,7 @@ func initConfig() {
 		// Search config in home directory with name ".heatmap" (without extension).
 		viper.AddConfigPath(home)
 		viper.SetConfigName(".heatmap")
+		viper.SetConfigType("json")
 	}
 
 	viper.AutomaticEnv() // read in environment variables that match

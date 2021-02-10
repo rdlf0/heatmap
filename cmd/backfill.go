@@ -27,13 +27,14 @@ var backfillCmd = &cobra.Command{
 	Long: `Finds all current bugs in the specified Jira project
 and their corresponding GitHub PRs. After that writes these
 mappings into a MongoDB collection.`,
-	Run: execute,
+	Run: backfill,
 }
 
 var (
 	client      = &http.Client{}
 	jiraHost    string
 	jiraProject string
+	dbname      string
 )
 
 // Bug represents a separate jira issue/bug
@@ -71,14 +72,13 @@ type MongoMapping struct {
 	IssueID int    `bson:"issue_id"`
 	Repo    string `bson:"repo"`
 	PRID    int    `bson:"pr_id"`
-	Visited bool   `bson:"visited"`
 }
 
 func init() {
 	rootCmd.AddCommand(backfillCmd)
 }
 
-func execute(cmd *cobra.Command, args []string) {
+func backfill(cmd *cobra.Command, args []string) {
 	jiraHost = viper.GetString("jira.host")
 	jiraProject = viper.GetString("jira.project")
 	jiraEmail := viper.GetString("jira.auth.email")
@@ -87,13 +87,14 @@ func execute(cmd *cobra.Command, args []string) {
 
 	bugs := collectBugs(auth)
 
-	ctx, cancel, client, coll := connectToMongo()
+	ctx, cancel, mongoClient := connectToMongo()
 	defer cancel()
 	defer func() {
-		if err := client.Disconnect(ctx); err != nil {
+		if err := mongoClient.Disconnect(ctx); err != nil {
 			panic(err)
 		}
 	}()
+	coll := mongoClient.Database(dbname).Collection("jira")
 
 	alreadyMapped := getAlreadyMappedIssueIDs(ctx, coll)
 	newMappingsByIssueID := make(map[int]*[]JiraPR)
@@ -116,14 +117,19 @@ func execute(cmd *cobra.Command, args []string) {
 		return
 	}
 
-	writeMappingsToMono(ctx, coll, newMappings)
+	docs := make([]interface{}, len(*newMappings))
+	for i, v := range *newMappings {
+		docs[i] = v
+	}
+
+	writeItemsToMongo(ctx, coll, docs)
 }
 
 func collectBugs(auth string) *[]Bug {
 	queryParams := url.Values{}
 	queryParams.Add("jql", fmt.Sprintf("project = %s and type = Bug", jiraProject))
 	queryParams.Add("fields", "id,key")
-	queryParams.Add("maxResults", "150")
+	queryParams.Add("maxResults", "5")
 
 	req, err := http.NewRequest("GET", fmt.Sprintf("%s/rest/api/latest/search?%s", jiraHost, queryParams.Encode()), nil)
 	if err != nil {
@@ -150,11 +156,11 @@ func collectBugs(auth string) *[]Bug {
 	return &bugs.Issues
 }
 
-func connectToMongo() (context.Context, context.CancelFunc, *mongo.Client, *mongo.Collection) {
+func connectToMongo() (context.Context, context.CancelFunc, *mongo.Client) {
 	srv := viper.GetString("mongo.srv")
 	user := viper.GetString("mongo.user")
 	pass := viper.GetString("mongo.password")
-	dbname := viper.GetString("mongo.dbname")
+	dbname = viper.GetString("mongo.dbname")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	client, err := mongo.Connect(ctx, options.Client().ApplyURI(
@@ -164,9 +170,7 @@ func connectToMongo() (context.Context, context.CancelFunc, *mongo.Client, *mong
 		log.Fatal(err)
 	}
 
-	collection := client.Database(dbname).Collection("jira")
-
-	return ctx, cancel, client, collection
+	return ctx, cancel, client
 }
 
 func getAlreadyMappedIssueIDs(ctx context.Context, collection *mongo.Collection) map[int]bool {
@@ -246,7 +250,6 @@ func convertJiraMappingsToMongoMappings(jiraMappings map[int]*[]JiraPR) *[]Mongo
 			m.IssueID = k
 			m.Repo = repo
 			m.PRID, _ = strconv.Atoi(pr.ID[1:])
-			m.Visited = false
 
 			result = append(result, m)
 		}
@@ -255,12 +258,7 @@ func convertJiraMappingsToMongoMappings(jiraMappings map[int]*[]JiraPR) *[]Mongo
 	return &result
 }
 
-func writeMappingsToMono(ctx context.Context, coll *mongo.Collection, mappings *[]MongoMapping) {
-	docs := make([]interface{}, len(*mappings))
-	for i, v := range *mappings {
-		docs[i] = v
-	}
-
+func writeItemsToMongo(ctx context.Context, coll *mongo.Collection, docs []interface{}) {
 	res, err := coll.InsertMany(ctx, docs, nil)
 	if err != nil {
 		panic(err)
