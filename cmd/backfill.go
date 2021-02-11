@@ -37,40 +37,40 @@ var (
 	dbname      string
 )
 
-// Bug represents a separate jira issue/bug
-type Bug struct {
+// bug represents a separate jira issue/bug
+type bug struct {
 	ID  int    `json:"id,string"`
 	Key string `json:"key"`
 }
 
-// IssuesResponse represents a response with issues
-type IssuesResponse struct {
+// issuesResponse represents a response with issues
+type issuesResponse struct {
 	StartAt    int   `json:"startAt"`
 	MaxResults int   `json:"maxResults"`
 	Total      int   `json:"total"`
-	Issues     []Bug `json:"issues"`
+	Issues     []bug `json:"issues"`
 }
 
-// JiraPR is a representation of a PR data in Jira
-type JiraPR struct {
+// jiraPR is a representation of a PR data in Jira
+type jiraPR struct {
 	ID     string `json:"id"`
 	Status string `json:"status"`
 	URL    string `json:"url"`
 }
 
-// DevStatusResponse represents a response of an issue's dev status
-type DevStatusResponse struct {
+// devStatusResponse represents a response of an issue's dev status
+type devStatusResponse struct {
 	Detail []struct {
-		PRs []JiraPR `json:"pullRequests"`
+		PRs []jiraPR `json:"pullRequests"`
 	} `json:"detail"`
 }
 
-// MongoMapping represents a mapping of a Jira Isuse and a GitHub PR
-type MongoMapping struct {
+// mongoMapping represents a mapping of a Jira Isuse and a GitHub PR
+type mongoMapping struct {
 	ID      string `bson:"_id,omitempty"`
 	Project string `bson:"project"`
 	IssueID int    `bson:"issue_id"`
-	Repo    string `bson:"repo"`
+	Repo    Repo   `bson:"repo"`
 	PRID    int    `bson:"pr_id"`
 }
 
@@ -94,10 +94,12 @@ func backfill(cmd *cobra.Command, args []string) {
 			panic(err)
 		}
 	}()
-	coll := mongoClient.Database(dbname).Collection("jira")
+
+	jiraCollName := viper.GetString("mongo.collections.jira")
+	coll := mongoClient.Database(dbname).Collection(jiraCollName)
 
 	alreadyMapped := getAlreadyMappedIssueIDs(ctx, coll)
-	newMappingsByIssueID := make(map[int]*[]JiraPR)
+	newMappingsByIssueID := make(map[int]*[]jiraPR)
 	for _, b := range *bugs {
 		if _, ok := alreadyMapped[b.ID]; !ok {
 			if ds, err := findDevStatus(b, auth); err == nil {
@@ -125,11 +127,11 @@ func backfill(cmd *cobra.Command, args []string) {
 	writeItemsToMongo(ctx, coll, docs)
 }
 
-func collectBugs(auth string) *[]Bug {
+func collectBugs(auth string) *[]bug {
 	queryParams := url.Values{}
 	queryParams.Add("jql", fmt.Sprintf("project = %s and type = Bug", jiraProject))
 	queryParams.Add("fields", "id,key")
-	queryParams.Add("maxResults", "5")
+	queryParams.Add("maxResults", "150")
 
 	req, err := http.NewRequest("GET", fmt.Sprintf("%s/rest/api/latest/search?%s", jiraHost, queryParams.Encode()), nil)
 	if err != nil {
@@ -145,7 +147,7 @@ func collectBugs(auth string) *[]Bug {
 
 	decoder := json.NewDecoder(resp.Body)
 
-	bugs := &IssuesResponse{}
+	bugs := &issuesResponse{}
 	err = decoder.Decode(bugs)
 	if err != nil {
 		panic(err)
@@ -184,7 +186,7 @@ func getAlreadyMappedIssueIDs(ctx context.Context, collection *mongo.Collection)
 
 	mappings := make(map[int]bool, 0)
 	for cur.Next(ctx) {
-		result := &MongoMapping{}
+		result := &mongoMapping{}
 		err := cur.Decode(&result)
 		if err != nil {
 			log.Fatal(err)
@@ -200,7 +202,7 @@ func getAlreadyMappedIssueIDs(ctx context.Context, collection *mongo.Collection)
 	return mappings
 }
 
-func findDevStatus(b Bug, auth string) (*[]JiraPR, error) {
+func findDevStatus(b bug, auth string) (*[]jiraPR, error) {
 	queryParams := url.Values{}
 	queryParams.Add("issueId", strconv.Itoa(b.ID))
 	queryParams.Add("applicationType", "GitHub")
@@ -220,7 +222,7 @@ func findDevStatus(b Bug, auth string) (*[]JiraPR, error) {
 
 	decoder := json.NewDecoder(resp.Body)
 
-	devStatus := &DevStatusResponse{}
+	devStatus := &devStatusResponse{}
 	err = decoder.Decode(devStatus)
 	if err != nil {
 		panic(err)
@@ -233,8 +235,8 @@ func findDevStatus(b Bug, auth string) (*[]JiraPR, error) {
 	return &devStatus.Detail[0].PRs, nil
 }
 
-func convertJiraMappingsToMongoMappings(jiraMappings map[int]*[]JiraPR) *[]MongoMapping {
-	result := make([]MongoMapping, 0)
+func convertJiraMappingsToMongoMappings(jiraMappings map[int]*[]jiraPR) *[]mongoMapping {
+	result := make([]mongoMapping, 0)
 
 	for k, v := range jiraMappings {
 		for _, pr := range *v {
@@ -244,11 +246,12 @@ func convertJiraMappingsToMongoMappings(jiraMappings map[int]*[]JiraPR) *[]Mongo
 
 			repoURL := strings.Split(pr.URL, "/pull")[0]
 			repo := strings.Split(repoURL, "github.com/")[1]
+			repoParts := strings.Split(repo, "/")
 
-			var m MongoMapping
+			var m mongoMapping
 			m.Project = jiraProject
 			m.IssueID = k
-			m.Repo = repo
+			m.Repo = Repo{Owner: repoParts[0], Name: repoParts[1]}
 			m.PRID, _ = strconv.Atoi(pr.ID[1:])
 
 			result = append(result, m)

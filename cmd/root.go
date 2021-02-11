@@ -22,6 +22,12 @@ about the changes related to the bugs. A vusalization shows the
 most problematic parts of the code.`,
 }
 
+// Repo represents a pair of a GitHub's repo owner and name
+type Repo struct {
+	Owner string `bson:"owner"`
+	Name  string `bson:"name"`
+}
+
 // Execute adds all child commands to the root command and sets flags appropriately.
 // This is called by main.main(). It only needs to happen once to the rootCmd.
 func Execute() {

@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"strings"
 
 	"github.com/google/go-github/github"
 	"github.com/spf13/cobra"
@@ -17,39 +16,30 @@ import (
 // collectDiffsCmd represents the collectDiffs command
 var collectDiffsCmd = &cobra.Command{
 	Use:   "collectDiffs",
-	Short: "A brief description of your command",
-	Long: `A longer description that spans multiple lines and likely contains examples
-and usage of using your command. For example:
-
-Cobra is a CLI library for Go that empowers applications.
-This application is a tool to generate the needed files
-to quickly create a Cobra application.`,
+	Short: "Collects the diffs of the PRs that are not already analyzed",
+	Long: `Gets all not already analyzed PRs and collects
+their diff info which then writes into a MongoDB collection`,
 	Run: collectDiffs,
 }
 
-// PR represents a pair of repo name and PR ID
-type PR struct {
-	Repo string `bson:"repo"`
-	PRID int    `bson:"pr_id"`
-}
+var (
+	jiraCollName   string
+	githubCollName string
+)
 
 type diff struct {
-	Additions int `bson:"additions"`
-	Deletions int `bson:"deletions"`
-	Changes   int `bson:"changes"`
+	File      string `bson:"file"`
+	Status    string `bson:"status"`
+	Additions int    `bson:"additions"`
+	Deletions int    `bson:"deletions"`
+	Changes   int    `bson:"changes"`
 }
 
-type change struct {
-	File   string `bson:"file"`
-	Status string `bson:"status"`
-	Diff   diff   `bson:"diff"`
-}
-
-type prChanges struct {
-	ID      string   `bson:"_id,omitempty"`
-	Repo    string   `bson:"repo"`
-	PRID    int      `bson:"pr_id"`
-	Changes []change `bson:"changes"`
+type pr struct {
+	ID   string `bson:"_id,omitempty"`
+	Repo Repo   `bson:"repo"`
+	PRID int    `bson:"pr_id"`
+	Diff []diff `bson:"diff,omitempty"`
 }
 
 func init() {
@@ -64,7 +54,10 @@ func collectDiffs(cmd *cobra.Command, args []string) {
 			panic(err)
 		}
 	}()
-	jiraColl := mongoClient.Database(dbname).Collection("jira")
+
+	jiraCollName = viper.GetString("mongo.collections.jira")
+	githubCollName = viper.GetString("mongo.collections.github")
+	jiraColl := mongoClient.Database(dbname).Collection(jiraCollName)
 	prs := getNotAnalyzedPRs(ctx, jiraColl)
 	fmt.Printf("New PRs found: %d\n", len(*prs))
 	if len(*prs) == 0 {
@@ -72,26 +65,26 @@ func collectDiffs(cmd *cobra.Command, args []string) {
 	}
 
 	client := connectToGitHub(ctx)
-	prChs := collectPRChanges(ctx, client, prs)
+	setPRsDiffs(ctx, client, prs)
 
-	if len(*prChs) == 0 {
+	if len(*prs) == 0 {
 		fmt.Println("No new PR changes")
 	}
 
-	docs := make([]interface{}, len(*prChs))
-	for i, v := range *prChs {
+	docs := make([]interface{}, len(*prs))
+	for i, v := range *prs {
 		docs[i] = v
 	}
 
-	ghColl := mongoClient.Database(dbname).Collection("github")
+	ghColl := mongoClient.Database(dbname).Collection(githubCollName)
 	writeItemsToMongo(ctx, ghColl, docs)
 }
 
-func getNotAnalyzedPRs(ctx context.Context, collection *mongo.Collection) *[]PR {
+func getNotAnalyzedPRs(ctx context.Context, collection *mongo.Collection) *[]pr {
 	lookup := bson.D{{
 		Key: "$lookup",
 		Value: bson.M{
-			"from":         "github",
+			"from":         githubCollName,
 			"localField":   "pr_id",
 			"foreignField": "pr_id",
 			"as":           "pr",
@@ -122,22 +115,22 @@ func getNotAnalyzedPRs(ctx context.Context, collection *mongo.Collection) *[]PR 
 	}
 	defer cur.Close(ctx)
 
-	PRs := make([]PR, 0)
+	prs := make([]pr, 0)
 	for cur.Next(ctx) {
-		p := &PR{}
+		p := &pr{}
 		err := cur.Decode(&p)
 		if err != nil {
 			log.Fatal(err)
 		}
 
-		PRs = append(PRs, *p)
+		prs = append(prs, *p)
 	}
 
 	if err := cur.Err(); err != nil {
 		log.Fatal(err)
 	}
 
-	return &PRs
+	return &prs
 }
 
 func connectToGitHub(ctx context.Context) *github.Client {
@@ -151,43 +144,30 @@ func connectToGitHub(ctx context.Context) *github.Client {
 	return client
 }
 
-func collectPRChanges(ctx context.Context, client *github.Client, PRs *[]PR) *[]prChanges {
-	prChs := make([]prChanges, 0)
-	for _, p := range *PRs {
+func setPRsDiffs(ctx context.Context, client *github.Client, prs *[]pr) {
+	for k, p := range *prs {
 		fmt.Printf("%+v\n", p)
 
-		repoParts := strings.Split(p.Repo, "/")
-		files, _, err := client.PullRequests.ListFiles(ctx, repoParts[0], repoParts[1], p.PRID, &github.ListOptions{PerPage: 100})
+		files, _, err := client.PullRequests.ListFiles(ctx, p.Repo.Owner, p.Repo.Name, p.PRID, &github.ListOptions{PerPage: 100})
 		if err != nil {
 			panic(err)
 		}
 
-		changes := make([]change, 0)
+		diffs := make([]diff, 0)
 		for _, f := range files {
-			fmt.Printf("File: %s\nadditions: %d\ndeletions: %d\nchanges: %d\n", *f.Filename, *f.Additions, *f.Deletions, *f.Changes)
-			d := &diff{
+			fmt.Printf("File: %s\nadditions: %d; deletions: %d; changes: %d\n", *f.Filename, *f.Additions, *f.Deletions, *f.Changes)
+
+			diff := &diff{
+				File:      *f.Filename,
+				Status:    *f.Status,
 				Additions: *f.Additions,
 				Deletions: *f.Deletions,
 				Changes:   *f.Changes,
 			}
 
-			ch := &change{
-				File:   *f.Filename,
-				Status: *f.Status,
-				Diff:   *d,
-			}
-
-			changes = append(changes, *ch)
+			diffs = append(diffs, *diff)
 		}
 
-		prCh := &prChanges{
-			Repo:    p.Repo,
-			PRID:    p.PRID,
-			Changes: changes,
-		}
-
-		prChs = append(prChs, *prCh)
+		(*prs)[k].Diff = diffs
 	}
-
-	return &prChs
 }
