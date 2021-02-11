@@ -76,11 +76,12 @@ type mongoMapping struct {
 
 func init() {
 	rootCmd.AddCommand(backfillCmd)
+	// TODO: take the default value from the config somehow
+	backfillCmd.Flags().StringVarP(&jiraProject, "project", "p", "Memberships", "Jira project name")
 }
 
 func backfill(cmd *cobra.Command, args []string) {
 	jiraHost = viper.GetString("jira.host")
-	jiraProject = viper.GetString("jira.project")
 	jiraEmail := viper.GetString("jira.auth.email")
 	jiraToken := viper.GetString("jira.auth.token")
 	auth := base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("%s:%s", jiraEmail, jiraToken)))
@@ -129,7 +130,7 @@ func backfill(cmd *cobra.Command, args []string) {
 
 func collectBugs(auth string) *[]bug {
 	queryParams := url.Values{}
-	queryParams.Add("jql", fmt.Sprintf("project = %s and type = Bug", jiraProject))
+	queryParams.Add("jql", fmt.Sprintf("project = %q and type = Bug", jiraProject))
 	queryParams.Add("fields", "id,key")
 	queryParams.Add("maxResults", "150")
 
