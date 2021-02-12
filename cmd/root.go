@@ -10,6 +10,11 @@ import (
 	"github.com/spf13/viper"
 )
 
+const (
+	defaultConfigName = ".heatmap"
+	defaultConfigType = "json"
+)
+
 var cfgFile string
 
 // rootCmd represents the base command when called without any subcommands
@@ -39,7 +44,7 @@ func Execute() {
 
 func init() {
 	cobra.OnInitialize(initConfig)
-	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default is $HOME/.heatmap.yaml)")
+	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", fmt.Sprintf("config file (default is $HOME/%s.%s)", defaultConfigName, defaultConfigType))
 }
 
 // initConfig reads in config file and ENV variables if set.
@@ -57,8 +62,8 @@ func initConfig() {
 
 		// Search config in home directory with name ".heatmap" (without extension).
 		viper.AddConfigPath(home)
-		viper.SetConfigName(".heatmap")
-		viper.SetConfigType("json")
+		viper.SetConfigName(defaultConfigName)
+		viper.SetConfigType(defaultConfigType)
 	}
 
 	viper.AutomaticEnv() // read in environment variables that match

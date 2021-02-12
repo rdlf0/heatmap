@@ -130,6 +130,7 @@ func backfill(cmd *cobra.Command, args []string) {
 
 func collectBugs(auth string) *[]bug {
 	queryParams := url.Values{}
+	// Potentially add "... and statusCategory = Done"
 	queryParams.Add("jql", fmt.Sprintf("project = %q and type = Bug", jiraProject))
 	queryParams.Add("fields", "id,key")
 	queryParams.Add("maxResults", "150")
