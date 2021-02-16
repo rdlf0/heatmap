@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -129,18 +128,20 @@ func backfill(cmd *cobra.Command, args []string) {
 }
 
 func collectBugs(auth string) *[]bug {
-	queryParams := url.Values{}
-	// Potentially add "... and statusCategory = Done"
-	queryParams.Add("jql", fmt.Sprintf("project = %q and type = Bug", jiraProject))
-	queryParams.Add("fields", "id,key")
-	queryParams.Add("maxResults", "150")
-
-	req, err := http.NewRequest("GET", fmt.Sprintf("%s/rest/api/latest/search?%s", jiraHost, queryParams.Encode()), nil)
+	req, err := http.NewRequest("GET", fmt.Sprintf("%s/rest/api/latest/search", jiraHost), nil)
 	if err != nil {
 		panic(err)
 	}
 	req.Header.Add("Authorization", fmt.Sprintf("Basic %s", auth))
 	req.Header.Add("Content-Type", "application/json")
+
+	q := req.URL.Query()
+	// q.Add("jql", fmt.Sprintf("project = %q and type = Bug and statusCategory = Done", jiraProject))
+	q.Add("jql", fmt.Sprintf("project = %q and type = Bug", jiraProject))
+	q.Add("fields", "id,key")
+	q.Add("maxResults", "150")
+	req.URL.RawQuery = q.Encode()
+
 	resp, err := client.Do(req)
 	if err != nil {
 		panic(err)
@@ -205,17 +206,19 @@ func getAlreadyMappedIssueIDs(ctx context.Context, collection *mongo.Collection)
 }
 
 func findDevStatus(b bug, auth string) (*[]jiraPR, error) {
-	queryParams := url.Values{}
-	queryParams.Add("issueId", strconv.Itoa(b.ID))
-	queryParams.Add("applicationType", "GitHub")
-	queryParams.Add("dataType", "pullrequest")
-
-	req, err := http.NewRequest("GET", fmt.Sprintf("%s/rest/dev-status/latest/issue/detail?%s", jiraHost, queryParams.Encode()), nil)
+	req, err := http.NewRequest("GET", fmt.Sprintf("%s/rest/dev-status/latest/issue/detail", jiraHost), nil)
 	if err != nil {
 		panic(err)
 	}
 	req.Header.Add("Content-Type", "application/json")
 	req.Header.Add("Authorization", fmt.Sprintf("Basic %s", auth))
+
+	q := req.URL.Query()
+	q.Add("issueId", strconv.Itoa(b.ID))
+	q.Add("applicationType", "GitHub")
+	q.Add("dataType", "pullrequest")
+	req.URL.RawQuery = q.Encode()
+
 	resp, err := client.Do(req)
 	if err != nil {
 		panic(err)
